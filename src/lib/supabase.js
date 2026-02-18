@@ -1,9 +1,14 @@
-import { createClient } from '@supabase/supabase-js'
+// OpenClaw Memory - No Supabase
+// All data stored in memory files at /data/.openclaw/workspace/memory/
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://llstjelzrvspxvoffpuc.supabase.co'
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxsc3RqZWx6cnZzcHh2b2ZmcHVjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MTgwNjIsImV4cCI6MjA4Njk5NDA2Mn0.Ag2zCHFcgnArH3EB0e4OelmX0PHKrFW66aVwztCqg2o'
+const MEMORY_API = '/api/memory'
 
-export const supabase = createClient(supabaseUrl, supabaseKey)
+export const supabase = {
+  // Dummy object for compatibility - actual data comes from memory API
+  from: (table) => ({
+    select: () => ({ data: [], error: null }),
+  })
+}
 
 // Real-time data fetchers
 export async function fetchDailyCheckIn() {
