@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
-import { TrendingUp, Users, AlertCircle, CheckCircle2, Zap } from 'lucide-react'
+import { getRealTimeTokenUsage, getSystemHealthMetrics } from '../../lib/openclaw'
+import { TrendingUp, Users, AlertCircle, CheckCircle2, Zap, Activity } from 'lucide-react'
 
 export default function Homepage() {
   const [data, setData] = useState({
@@ -14,11 +15,15 @@ export default function Homepage() {
     blockers: [],
     wins: [],
   })
+  const [systemHealth, setSystemHealth] = useState(null)
+  const [tokenUsage, setTokenUsage] = useState({ hourly: 0, daily: 0, total: 0 })
   const [loading, setLoading] = useState(true)
   const [newWin, setNewWin] = useState('')
 
   useEffect(() => {
     loadAllData()
+    const interval = setInterval(loadAllData, 30000) // Refresh every 30 seconds
+    return () => clearInterval(interval)
   }, [])
 
   async function loadAllData() {
@@ -40,6 +45,10 @@ export default function Homepage() {
       const { data: prospectData } = await supabase.from('prospects').select('*').eq('status', 'active')
       const prospectCount = prospectData?.length || 0
 
+      // Get real-time system metrics
+      const health = await getSystemHealthMetrics()
+      const tokenUsageData = await getRealTimeTokenUsage()
+
       setData(prev => ({
         ...prev,
         clients: clientCount,
@@ -48,6 +57,8 @@ export default function Homepage() {
         tokenCost,
         prospects: prospectCount,
       }))
+      setSystemHealth(health)
+      setTokenUsage(tokenUsageData)
     } catch (err) {
       console.error('Error loading data:', err)
     } finally {
@@ -103,7 +114,7 @@ export default function Homepage() {
         </div>
       </div>
 
-      {/* Key Metrics */}
+      {/* Key Metrics - Business */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800 rounded-lg p-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">Active Clients</p>
@@ -114,14 +125,38 @@ export default function Homepage() {
           <p className="text-3xl font-bold text-green-600 dark:text-green-300 mt-1">${(data.revenue / 1000).toFixed(1)}k</p>
         </div>
         <div className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900 dark:to-orange-800 rounded-lg p-4">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Token Cost</p>
-          <p className="text-3xl font-bold text-orange-600 dark:text-orange-300 mt-1">${data.tokenCost.toFixed(0)}</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">Token Cost (Total)</p>
+          <p className="text-3xl font-bold text-orange-600 dark:text-orange-300 mt-1">${tokenUsage.total.toFixed(0)}</p>
         </div>
         <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900 dark:to-purple-800 rounded-lg p-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">Profit Margin</p>
           <p className="text-3xl font-bold text-purple-600 dark:text-purple-300 mt-1">{margin}%</p>
         </div>
       </div>
+
+      {/* Real-Time System Metrics */}
+      {systemHealth && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900 dark:to-red-800 rounded-lg p-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400 flex items-center gap-1">
+              <Activity size={14} /> Hourly Token Cost
+            </p>
+            <p className="text-3xl font-bold text-red-600 dark:text-red-300 mt-1">${tokenUsage.hourly.toFixed(2)}</p>
+          </div>
+          <div className="bg-gradient-to-br from-yellow-50 to-yellow-100 dark:from-yellow-900 dark:to-yellow-800 rounded-lg p-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400">Daily Token Cost</p>
+            <p className="text-3xl font-bold text-yellow-600 dark:text-yellow-300 mt-1">${tokenUsage.daily.toFixed(0)}</p>
+          </div>
+          <div className="bg-gradient-to-br from-cyan-50 to-cyan-100 dark:from-cyan-900 dark:to-cyan-800 rounded-lg p-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400">Active Sessions</p>
+            <p className="text-3xl font-bold text-cyan-600 dark:text-cyan-300 mt-1">{systemHealth.activeSessions}</p>
+          </div>
+          <div className="bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-900 dark:to-pink-800 rounded-lg p-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400">Tasks Completed</p>
+            <p className="text-3xl font-bold text-pink-600 dark:text-pink-300 mt-1">{systemHealth.completedTasks}</p>
+          </div>
+        </div>
+      )}
 
       {/* Sales Pipeline & Clients */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
