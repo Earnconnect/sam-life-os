@@ -1,24 +1,26 @@
 import React, { useState, useEffect } from 'react'
-import { supabase } from '../../lib/supabase'
-import { getRealTimeTokenUsage, getSystemHealthMetrics } from '../../lib/openclaw'
-import { TrendingUp, Users, AlertCircle, CheckCircle2, Zap, Activity } from 'lucide-react'
+import { TrendingUp, Users, AlertCircle, CheckCircle2, Zap, Activity, RefreshCw } from 'lucide-react'
+import { 
+  fetchClients, 
+  fetchFinancials, 
+  fetchProspects, 
+  fetchActivityLog,
+  fetchTokenLogs,
+  healthCheck
+} from '../../lib/api-client'
 
 export default function Homepage() {
   const [data, setData] = useState({
     clients: 0,
     revenue: 0,
     expenses: 0,
+    mrr: 0,
     tokenCost: 0,
     prospects: 0,
-    energy: 7,
-    focus: '',
-    blockers: [],
-    wins: [],
   })
-  const [systemHealth, setSystemHealth] = useState(null)
-  const [tokenUsage, setTokenUsage] = useState({ hourly: 0, daily: 0, total: 0 })
+  const [recentActivity, setRecentActivity] = useState([])
   const [loading, setLoading] = useState(true)
-  const [newWin, setNewWin] = useState('')
+  const [apiStatus, setApiStatus] = useState('connecting')
 
   useEffect(() => {
     loadAllData()
@@ -28,218 +30,212 @@ export default function Homepage() {
 
   async function loadAllData() {
     try {
-      // Fetch clients
-      const { data: clientsData } = await supabase.from('clients').select('*').eq('status', 'active')
-      const clientCount = clientsData?.length || 0
+      setLoading(true)
 
-      // Fetch financials
-      const { data: finData } = await supabase.from('financials').select('*')
-      const revenue = finData?.filter(f => f.type === 'revenue').reduce((sum, f) => sum + f.amount, 0) || 0
-      const expenses = finData?.filter(f => f.type === 'expense').reduce((sum, f) => sum + f.amount, 0) || 0
+      // Check API health
+      const health = await healthCheck()
+      setApiStatus(health.status === 'ok' ? 'connected' : 'disconnected')
 
-      // Fetch tokens
-      const { data: tokenData } = await supabase.from('token_logs').select('*')
-      const tokenCost = tokenData?.reduce((sum, t) => sum + t.cost, 0) || 0
+      // Fetch all data in parallel
+      const [clientsRes, finRes, prospectsRes, activityRes, tokensRes] = await Promise.all([
+        fetchClients().catch(() => []),
+        fetchFinancials().catch(() => ({ revenue: [], expenses: [], total: { revenue: 0, expenses: 0, mrr: 0 } })),
+        fetchProspects().catch(() => []),
+        fetchActivityLog(10).catch(() => []),
+        fetchTokenLogs().catch(() => [])
+      ])
 
-      // Fetch prospects
-      const { data: prospectData } = await supabase.from('prospects').select('*').eq('status', 'active')
-      const prospectCount = prospectData?.length || 0
+      // Process clients
+      const activeClients = Array.isArray(clientsRes) ? clientsRes.filter(c => c.status === 'active') : []
+      const clientCount = activeClients.length
 
-      // Get real-time system metrics
-      const health = await getSystemHealthMetrics()
-      const tokenUsageData = await getRealTimeTokenUsage()
+      // Process financials
+      const finData = finRes || { revenue: [], expenses: [], total: { revenue: 0, expenses: 0, mrr: 0 } }
+      const revenue = finData.total?.revenue || 0
+      const expenses = finData.total?.expenses || 0
+      const mrr = finData.total?.mrr || 0
 
-      setData(prev => ({
-        ...prev,
+      // Process prospects
+      const prospects = Array.isArray(prospectsRes) ? prospectsRes : []
+      const prospectCount = prospects.filter(p => p.stage !== 'closed-lost').length
+
+      // Process tokens
+      const tokens = Array.isArray(tokensRes) ? tokensRes : []
+      const tokenCost = tokens.reduce((sum, t) => sum + (t.cost || 0), 0)
+
+      // Process activity
+      const activity = Array.isArray(activityRes) ? activityRes : []
+
+      setData({
         clients: clientCount,
         revenue,
         expenses,
+        mrr,
         tokenCost,
         prospects: prospectCount,
-      }))
-      setSystemHealth(health)
-      setTokenUsage(tokenUsageData)
-    } catch (err) {
-      console.error('Error loading data:', err)
-    } finally {
+      })
+
+      setRecentActivity(activity.slice(0, 10))
+      setLoading(false)
+    } catch (error) {
+      console.error('Error loading data:', error)
+      setApiStatus('error')
       setLoading(false)
     }
   }
 
   const profit = data.revenue - data.expenses
-  const margin = data.revenue > 0 ? ((profit / data.revenue) * 100).toFixed(1) : 0
-
-  const addWin = () => {
-    if (newWin.trim()) {
-      setData(prev => ({ ...prev, wins: [...prev.wins, newWin] }))
-      setNewWin('')
-    }
-  }
+  const profitMargin = data.revenue > 0 ? ((profit / data.revenue) * 100).toFixed(1) : 0
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <h1 className="text-4xl font-bold text-gray-900 dark:text-white">⚡ Sam's Life OS</h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-2">Your complete operating system. Real-time view of everything.</p>
+    <div className="space-y-6">
+      {/* Status Bar */}
+      <div className="flex items-center justify-between bg-slate-700 p-4 rounded-lg">
+        <div className="flex items-center gap-2">
+          <Zap className={`w-4 h-4 ${apiStatus === 'connected' ? 'text-green-400' : apiStatus === 'error' ? 'text-red-400' : 'text-yellow-400'}`} />
+          <span className="text-sm text-gray-300">
+            {apiStatus === 'connected' && 'OpenClaw Synced'}
+            {apiStatus === 'disconnected' && 'Connecting...'}
+            {apiStatus === 'error' && 'Connection Error'}
+          </span>
+        </div>
+        <button
+          onClick={loadAllData}
+          className="flex items-center gap-2 px-3 py-1 bg-slate-600 hover:bg-slate-500 rounded text-xs text-gray-300"
+        >
+          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
       </div>
 
-      {/* Energy & Focus Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <label className="block text-sm font-semibold text-gray-900 dark:text-white mb-4">Energy Level Today</label>
-          <div className="flex items-center gap-4">
-            <input
-              type="range"
-              min="1"
-              max="10"
-              value={data.energy}
-              onChange={(e) => setData(prev => ({ ...prev, energy: parseInt(e.target.value) }))}
-              className="flex-1"
-            />
-            <span className="text-3xl">{data.energy <= 3 ? '😴' : data.energy <= 6 ? '😐' : '🔥'}</span>
-            <span className="text-2xl font-bold text-blue-600">{data.energy}/10</span>
+      {/* Main Metrics Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Revenue Card */}
+        <div className="bg-gradient-to-br from-emerald-900 to-emerald-800 p-6 rounded-lg border border-emerald-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-emerald-200 text-sm font-medium">Total Revenue</p>
+              <h3 className="text-3xl font-bold text-emerald-300 mt-2">${data.revenue.toFixed(0)}</h3>
+              <p className="text-emerald-300 text-xs mt-1">MRR: ${data.mrr.toFixed(0)}</p>
+            </div>
+            <TrendingUp className="w-8 h-8 text-emerald-400 opacity-50" />
           </div>
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <label className="block text-sm font-semibold text-gray-900 dark:text-white mb-4">Today's Focus</label>
-          <input
-            type="text"
-            value={data.focus}
-            onChange={(e) => setData(prev => ({ ...prev, focus: e.target.value }))}
-            placeholder="What are you focusing on today?"
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-          />
-        </div>
-      </div>
-
-      {/* Key Metrics - Business */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800 rounded-lg p-4">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Active Clients</p>
-          <p className="text-3xl font-bold text-blue-600 dark:text-blue-300 mt-1">{data.clients}</p>
-        </div>
-        <div className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900 dark:to-green-800 rounded-lg p-4">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Revenue</p>
-          <p className="text-3xl font-bold text-green-600 dark:text-green-300 mt-1">${(data.revenue / 1000).toFixed(1)}k</p>
-        </div>
-        <div className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900 dark:to-orange-800 rounded-lg p-4">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Token Cost (Total)</p>
-          <p className="text-3xl font-bold text-orange-600 dark:text-orange-300 mt-1">${tokenUsage.total.toFixed(0)}</p>
-        </div>
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900 dark:to-purple-800 rounded-lg p-4">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Profit Margin</p>
-          <p className="text-3xl font-bold text-purple-600 dark:text-purple-300 mt-1">{margin}%</p>
-        </div>
-      </div>
-
-      {/* Real-Time System Metrics */}
-      {systemHealth && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900 dark:to-red-800 rounded-lg p-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400 flex items-center gap-1">
-              <Activity size={14} /> Hourly Token Cost
-            </p>
-            <p className="text-3xl font-bold text-red-600 dark:text-red-300 mt-1">${tokenUsage.hourly.toFixed(2)}</p>
-          </div>
-          <div className="bg-gradient-to-br from-yellow-50 to-yellow-100 dark:from-yellow-900 dark:to-yellow-800 rounded-lg p-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">Daily Token Cost</p>
-            <p className="text-3xl font-bold text-yellow-600 dark:text-yellow-300 mt-1">${tokenUsage.daily.toFixed(0)}</p>
-          </div>
-          <div className="bg-gradient-to-br from-cyan-50 to-cyan-100 dark:from-cyan-900 dark:to-cyan-800 rounded-lg p-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">Active Sessions</p>
-            <p className="text-3xl font-bold text-cyan-600 dark:text-cyan-300 mt-1">{systemHealth.activeSessions}</p>
-          </div>
-          <div className="bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-900 dark:to-pink-800 rounded-lg p-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">Tasks Completed</p>
-            <p className="text-3xl font-bold text-pink-600 dark:text-pink-300 mt-1">{systemHealth.completedTasks}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Sales Pipeline & Clients */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <TrendingUp size={20} /> Sales Pipeline
-          </h2>
-          <div className="space-y-2">
-            <p className="text-sm text-gray-600 dark:text-gray-400">Active Prospects: <span className="font-bold text-gray-900 dark:text-white">{data.prospects}</span></p>
-            <p className="text-xs text-gray-500 mt-3">Funnel stages coming from prospects table</p>
+        {/* Profit Card */}
+        <div className="bg-gradient-to-br from-blue-900 to-blue-800 p-6 rounded-lg border border-blue-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-blue-200 text-sm font-medium">Profit</p>
+              <h3 className="text-3xl font-bold text-blue-300 mt-2">${profit.toFixed(0)}</h3>
+              <p className="text-blue-300 text-xs mt-1">Margin: {profitMargin}%</p>
+            </div>
+            <CheckCircle2 className="w-8 h-8 text-blue-400 opacity-50" />
           </div>
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <Users size={20} /> Active Clients
-          </h2>
-          <div className="space-y-2">
-            <p className="text-sm text-gray-600 dark:text-gray-400">MeetingMind: <span className="font-bold text-gray-900 dark:text-white">$2,499</span></p>
-            <p className="text-sm text-gray-600 dark:text-gray-400">Lodigi: <span className="font-bold text-gray-900 dark:text-white">$2,499</span></p>
-            <p className="text-sm text-gray-600 dark:text-gray-400">Other: <span className="font-bold text-gray-900 dark:text-white">$2,499</span></p>
+        {/* Expenses Card */}
+        <div className="bg-gradient-to-br from-red-900 to-red-800 p-6 rounded-lg border border-red-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-red-200 text-sm font-medium">Expenses</p>
+              <h3 className="text-3xl font-bold text-red-300 mt-2">${data.expenses.toFixed(0)}</h3>
+              <p className="text-red-300 text-xs mt-1">APIs: ${data.tokenCost.toFixed(2)}</p>
+            </div>
+            <AlertCircle className="w-8 h-8 text-red-400 opacity-50" />
+          </div>
+        </div>
+
+        {/* Clients Card */}
+        <div className="bg-gradient-to-br from-purple-900 to-purple-800 p-6 rounded-lg border border-purple-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-purple-200 text-sm font-medium">Active Clients</p>
+              <h3 className="text-3xl font-bold text-purple-300 mt-2">{data.clients}</h3>
+              <p className="text-purple-300 text-xs mt-1">Goal: 30 clients</p>
+            </div>
+            <Users className="w-8 h-8 text-purple-400 opacity-50" />
+          </div>
+        </div>
+
+        {/* Prospects Card */}
+        <div className="bg-gradient-to-br from-orange-900 to-orange-800 p-6 rounded-lg border border-orange-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-orange-200 text-sm font-medium">Pipeline</p>
+              <h3 className="text-3xl font-bold text-orange-300 mt-2">{data.prospects}</h3>
+              <p className="text-orange-300 text-xs mt-1">Opportunities</p>
+            </div>
+            <TrendingUp className="w-8 h-8 text-orange-400 opacity-50" />
+          </div>
+        </div>
+
+        {/* Token Usage Card */}
+        <div className="bg-gradient-to-br from-cyan-900 to-cyan-800 p-6 rounded-lg border border-cyan-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-cyan-200 text-sm font-medium">API Costs</p>
+              <h3 className="text-3xl font-bold text-cyan-300 mt-2">${data.tokenCost.toFixed(2)}</h3>
+              <p className="text-cyan-300 text-xs mt-1">Total Spent</p>
+            </div>
+            <Zap className="w-8 h-8 text-cyan-400 opacity-50" />
           </div>
         </div>
       </div>
 
-      {/* Blockers & Wins */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <AlertCircle size={20} className="text-red-600" /> Top Blockers
-          </h2>
-          <ul className="space-y-2">
-            <li className="text-sm text-gray-600 dark:text-gray-400">• No Supabase tables yet (creating tonight)</li>
-            <li className="text-sm text-gray-600 dark:text-gray-400">• Need to log first prospect</li>
-            <li className="text-sm text-gray-600 dark:text-gray-400">• Time management optimization needed</li>
-          </ul>
+      {/* Recent Activity */}
+      <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Activity className="w-5 h-5 text-gray-400" />
+          <h2 className="text-lg font-semibold text-white">Recent Activity</h2>
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <CheckCircle2 size={20} className="text-green-600" /> Today's Wins
-          </h2>
-          <div className="space-y-2">
-            {data.wins.map((win, idx) => (
-              <div key={idx} className="text-sm text-gray-600 dark:text-gray-400 flex items-start gap-2">
-                <input type="checkbox" className="mt-1" />
-                <span>{win}</span>
+        {recentActivity.length > 0 ? (
+          <div className="space-y-3">
+            {recentActivity.map((activity, idx) => (
+              <div key={idx} className="flex items-start gap-3 p-3 bg-slate-700 rounded">
+                <div className="w-2 h-2 bg-blue-400 rounded-full mt-2"></div>
+                <div className="flex-1">
+                  <p className="text-sm text-gray-200">{activity.message || activity.title || 'Activity'}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {new Date(activity.timestamp || activity.createdAt).toLocaleString()}
+                  </p>
+                </div>
               </div>
             ))}
-            <div className="flex gap-2 mt-4">
-              <input
-                type="text"
-                value={newWin}
-                onChange={(e) => setNewWin(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && addWin()}
-                placeholder="Add today's win..."
-                className="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              />
-              <button onClick={addWin} className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700">+</button>
-            </div>
           </div>
-        </div>
+        ) : (
+          <p className="text-gray-400 text-sm">No recent activity. Start logging to see updates here.</p>
+        )}
       </div>
 
-      {/* Next Actions */}
-      <div className="bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800 rounded-lg p-6 border border-blue-200 dark:border-blue-700">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">🎯 Next Actions</h2>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div>
-            <h3 className="font-semibold text-gray-900 dark:text-white mb-2">For Sam:</h3>
-            <ul className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-              <li>✓ Reach out to 5 prospects</li>
-              <li>✓ Complete client project delivery</li>
-              <li>✓ Set up Supabase tables tonight</li>
-            </ul>
+      {/* Quick Stats */}
+      <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-white mb-4">Quick Stats</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-slate-700 p-4 rounded">
+            <p className="text-gray-400 text-xs">Avg Client Value</p>
+            <p className="text-xl font-bold text-white mt-2">
+              ${data.clients > 0 ? (data.mrr / data.clients).toFixed(0) : 0}
+            </p>
           </div>
-          <div>
-            <h3 className="font-semibold text-gray-900 dark:text-white mb-2">For Jacky (AI):</h3>
-            <ul className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-              <li>✓ Monitor sales pipeline daily</li>
-              <li>✓ Optimize token usage</li>
-              <li>✓ Prepare weekly review summary</li>
-            </ul>
+          <div className="bg-slate-700 p-4 rounded">
+            <p className="text-gray-400 text-xs">Revenue/Expense Ratio</p>
+            <p className="text-xl font-bold text-white mt-2">
+              {data.expenses > 0 ? (data.revenue / data.expenses).toFixed(2) : '∞'}x
+            </p>
+          </div>
+          <div className="bg-slate-700 p-4 rounded">
+            <p className="text-gray-400 text-xs">Cost Per Client</p>
+            <p className="text-xl font-bold text-white mt-2">
+              ${data.clients > 0 ? (data.expenses / data.clients).toFixed(0) : 0}
+            </p>
+          </div>
+          <div className="bg-slate-700 p-4 rounded">
+            <p className="text-gray-400 text-xs">Growth Target</p>
+            <p className="text-xl font-bold text-white mt-2">
+              {data.clients}/30 clients
+            </p>
           </div>
         </div>
       </div>
